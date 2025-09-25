@@ -1,200 +1,181 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
+import React from "react";
+import { Link } from "react-router-dom";
+import AuthModal from "./components/AuthModal";
+import { supabase } from "./lib/supabase";
+import { startCheckout } from "./utils/checkout";
 
-type Result = { id?: string; name?: string; price?: number; store?: string; category?: string };
-
-const API_BASE = import.meta.env.VITE_API_BASE;
+type Profile = {
+  subscription_status: string | null;
+  stripe_customer_id: string | null;
+};
 
 export default function App() {
-  // shared form state
-  const [zip, setZip] = useState("");
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<"groceries" | "all">("groceries");
-  const isFree = category === "groceries";
+  const [authOpen, setAuthOpen] = React.useState(false);
+  const [user, setUser] = React.useState<{ id: string; email?: string } | null>(null);
+  const [profile, setProfile] = React.useState<Profile | null>(null);
+  const [query, setQuery] = React.useState("");
+  const [zip, setZip] = React.useState("");
 
-  // fetch mock/product list (your backend can add real filters later)
-  const { data, isFetching, refetch } = useQuery<Result[]>({
-    queryKey: ["search", zip, query, category],
-    enabled: false, // run only when user clicks Search
-    queryFn: async () => {
-      const url = new URL(`${API_BASE}/api/products/list`);
-      // Send what the backend will eventually support:
-      url.searchParams.set("zip", zip);
-      url.searchParams.set("q", query);
-      url.searchParams.set("category", category);
-      const res = await fetch(url.toString());
-      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-      return res.json();
-    },
-  });
+  // load auth user + keep in sync
+  React.useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user) setUser({ id: data.user.id, email: data.user.email || undefined });
+      else setUser(null);
+    });
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_evt, session) => {
+      if (session?.user) {
+        setUser({ id: session.user.id, email: session.user.email || undefined });
+        // fetch profile
+        const { data } = await supabase
+          .from("profiles")
+          .select("subscription_status,stripe_customer_id")
+          .eq("id", session.user.id)
+          .maybeSingle();
+        setProfile((data as Profile) || null);
+      } else {
+        setUser(null);
+        setProfile(null);
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  async function handleUpgrade() {
+    if (!user?.id || !user?.email) { setAuthOpen(true); return; }
+    await startCheckout(user.id, user.email, "monthly");
+  }
+
+  function onSearch(e: React.FormEvent) {
+    e.preventDefault();
+    alert(`(Demo) Searching "${query}" near ZIP ${zip || "-----"}`);
+  }
+
+  const isPremium = profile?.subscription_status === "active";
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-indigo-50 via-white to-white">
-      {/* NAV */}
-      <nav className="sticky top-0 z-50 border-b bg-white/80 backdrop-blur">
-        <div className="max-w-6xl mx-auto h-14 px-4 flex items-center justify-between">
+    <>
+      {/* Header */}
+      <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
+        <div className="container mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
+          <Link to="/" className="font-semibold tracking-tight text-emerald-600">SmartSaver</Link>
+          <nav className="hidden md:flex gap-6 text-sm text-neutral-700">
+            <a href="#search" className="hover:text-neutral-900">Search</a>
+            <a href="#pricing" className="hover:text-neutral-900">Pricing</a>
+            <a href="#reviews" className="hover:text-neutral-900">Reviews</a>
+          </nav>
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-indigo-600" />
-            <span className="font-extrabold tracking-tight">SmartSaver</span>
+            {!user ? (
+              <>
+                <button onClick={() => setAuthOpen(true)} className="rounded-xl bg-emerald-600 px-3 py-2 text-sm text-white">
+                  Create account
+                </button>
+                <button onClick={() => setAuthOpen(true)} className="rounded-xl border px-3 py-2 text-sm">
+                  Sign in
+                </button>
+              </>
+            ) : (
+              <>
+                {isPremium && (
+                  <span className="hidden sm:inline-flex items-center rounded-full bg-yellow-100 px-2 py-1 text-xs font-semibold text-yellow-800">
+                    Premium
+                  </span>
+                )}
+                <Link to="/account" className="rounded-xl bg-blue-600 px-3 py-2 text-sm text-white">Account</Link>
+              </>
+            )}
           </div>
-          <div className="hidden md:flex items-center gap-6 text-sm">
-            <a href="#pricing" className="hover:text-indigo-600">Pricing</a>
-            <a href={API_BASE + "/api/health"} target="_blank" className="hover:text-indigo-600">API Health</a>
-            <Button className="bg-indigo-600 hover:bg-indigo-700 text-white">Get Started</Button>
-          </div>
-        </div>
-      </nav>
-
-      {/* HERO + SEARCH */}
-      <header className="relative">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(60%_60%_at_50%_-10%,rgba(79,70,229,0.20),transparent)]" />
-        <div className="max-w-6xl mx-auto px-4 pt-12 pb-6 grid lg:grid-cols-2 gap-10 items-center">
-          <div className="space-y-4">
-            <Badge variant="secondary" className="rounded-full px-3 py-1">New</Badge>
-            <h1 className="text-4xl md:text-5xl font-extrabold leading-tight">
-              Compare prices in seconds. <span className="text-indigo-600">Start free.</span>
-            </h1>
-            <p className="text-slate-600">
-              Free plan searches <span className="font-medium">Groceries</span>. Premium unlocks <span className="font-medium">all departments</span> across 200+ retailers.
-            </p>
-          </div>
-
-          <Card className="shadow-xl">
-            <CardHeader>
-              <CardTitle>Search</CardTitle>
-              <CardDescription>Free users search Groceries. Premium searches Everything.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <Tabs defaultValue="free" onValueChange={(v) => setCategory(v === "free" ? "groceries" : "all")}>
-                <TabsList className="grid grid-cols-2 w-full">
-                  <TabsTrigger value="free">Free</TabsTrigger>
-                  <TabsTrigger value="premium">Premium</TabsTrigger>
-                </TabsList>
-
-                {/* FREE TAB */}
-                <TabsContent value="free" className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="zip">ZIP code</Label>
-                      <Input id="zip" placeholder="e.g. 49201" value={zip} onChange={(e) => setZip(e.target.value)} />
-                    </div>
-                    <div>
-                      <Label>Category</Label>
-                      <Input value="Groceries" readOnly className="bg-slate-100" />
-                    </div>
-                  </div>
-                  <div>
-                    <Label htmlFor="q">Product or brand</Label>
-                    <Input id="q" placeholder="e.g. milk, eggs, bread…" value={query} onChange={(e) => setQuery(e.target.value)} />
-                  </div>
-                </TabsContent>
-
-                {/* PREMIUM TAB */}
-                <TabsContent value="premium" className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <Label htmlFor="zip2">ZIP code</Label>
-                      <Input id="zip2" placeholder="e.g. 49201" value={zip} onChange={(e) => setZip(e.target.value)} />
-                    </div>
-                    <div>
-                      <Label>Category</Label>
-                      <Select value={category === "all" ? "all" : "groceries"} onValueChange={(v) => setCategory(v === "all" ? "all" : "groceries")}>
-                        <SelectTrigger><SelectValue placeholder="Pick a category" /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">Everything (Premium)</SelectItem>
-                          <SelectItem value="groceries">Groceries</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <div>
-                    <Label htmlFor="q2">Product or brand</Label>
-                    <Input id="q2" placeholder="e.g. TV, cereal, sneakers…" value={query} onChange={(e) => setQuery(e.target.value)} />
-                  </div>
-                  <p className="text-xs text-slate-500">Premium includes all departments and advanced filters.</p>
-                </TabsContent>
-              </Tabs>
-
-              <Button
-                className="w-full bg-indigo-600 hover:bg-indigo-700"
-                disabled={!zip || !query}
-                onClick={() => refetch()}
-              >
-                {isFetching ? "Searching…" : `Search ${isFree ? "Groceries (Free)" : "Everything (Premium)"}`}
-              </Button>
-
-              {/* RESULTS */}
-              {data && (
-                <div className="mt-4 space-y-2">
-                  {data.length === 0 ? (
-                    <p className="text-sm text-slate-500">No results yet (or backend returns empty list). We’ll wire real filters next.</p>
-                  ) : (
-                    <ul className="divide-y rounded border">
-                      {data.map((r, i) => (
-                        <li key={r.id ?? i} className="p-3 flex items-center justify-between">
-                          <div>
-                            <p className="font-medium">{r.name}</p>
-                            <p className="text-xs text-slate-500">{r.store} • {r.category}</p>
-                          </div>
-                          <p className="font-semibold">${r.price?.toFixed(2)}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
         </div>
       </header>
 
-      {/* PRICING */}
-      <section id="pricing" className="py-16 bg-white">
-        <div className="max-w-6xl mx-auto px-4">
-          <h2 className="text-3xl font-bold text-center mb-10">Choose Your Plan</h2>
-          <div className="grid md:grid-cols-2 gap-8">
-            {/* FREE */}
-            <Card className="border-green-300">
-              <CardHeader>
-                <CardTitle className="text-green-600">Free</CardTitle>
-                <CardDescription>Start saving on groceries</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <p>✅ Grocery comparisons</p>
-                <p>✅ Search across 50 states</p>
-                <p>❌ All-department search</p>
-                <Button className="w-full mt-2 bg-green-600 hover:bg-green-700">Start Free</Button>
-              </CardContent>
-            </Card>
+      {/* Hero + Search */}
+      <section className="bg-gradient-to-r from-indigo-500 via-blue-600 to-cyan-500 text-white">
+        <div className="container mx-auto max-w-6xl px-4 py-16">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight">
+            America’s Price-Comparison Tool
+          </h1>
+          <p className="mt-3 text-white/90 max-w-2xl">
+            Compare millions of products across 200+ retailers in all 50 states. Start saving today.
+          </p>
 
-            {/* PREMIUM */}
-            <Card className="border-purple-400 shadow-lg">
-              <CardHeader>
-                <CardTitle className="text-purple-600">Premium</CardTitle>
-                <CardDescription>Unlock the full SmartSaver experience</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <p>✅ Everything in Free</p>
-                <p>✅ All departments (electronics, home, apparel, …)</p>
-                <p>✅ 200+ retailers</p>
-                <p>✅ Advanced filters</p>
-                <Button className="w-full mt-2 bg-purple-600 hover:bg-purple-700">Upgrade to Premium</Button>
-              </CardContent>
-            </Card>
+          <div id="search" className="mt-8 bg-white rounded-2xl p-4 text-black shadow">
+            <form onSubmit={onSearch} className="grid grid-cols-1 sm:grid-cols-[1fr_160px_110px] gap-3 items-center">
+              <input
+                className="rounded-xl border px-3 py-2 outline-none ring-emerald-500/0 focus:ring-2"
+                placeholder="Search groceries instantly — for free"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <input
+                className="rounded-xl border px-3 py-2"
+                placeholder="ZIP (optional)"
+                inputMode="numeric"
+                maxLength={5}
+                value={zip}
+                onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))}
+              />
+              <button className="rounded-xl bg-blue-600 text-white py-2">Search</button>
+            </form>
+            <p className="mt-2 text-xs text-neutral-600">🔒 Secure checkout by Stripe.</p>
           </div>
         </div>
       </section>
 
-      <footer className="border-t py-8 text-center text-sm text-slate-500">
-        © {new Date().getFullYear()} SmartSaver. All rights reserved.
-      </footer>
-    </div>
+      {/* Pricing */}
+      <section id="pricing" className="container mx-auto max-w-6xl px-4 py-14">
+        <h2 className="text-3xl font-bold text-center">Choose Your Plan</h2>
+        <div className="mt-8 grid md:grid-cols-2 gap-6">
+          <div className="rounded-2xl border shadow-sm bg-white p-6">
+            <h3 className="text-xl font-semibold">Free Plan</h3>
+            <ul className="mt-3 space-y-2 text-sm text-neutral-700">
+              <li>✅ Grocery comparisons</li>
+              <li>✅ Search across 50 states</li>
+              <li>✅ Starter deals</li>
+            </ul>
+            <button onClick={() => setAuthOpen(true)} className="mt-6 w-full rounded-xl border px-4 py-2">
+              Get started free
+            </button>
+          </div>
+
+          <div className="rounded-2xl border-2 border-yellow-400 shadow bg-white p-6">
+            <h3 className="text-xl font-semibold">Premium Plan</h3>
+            <div className="text-3xl font-extrabold mt-1">$9.99 <span className="text-base font-medium">/month</span></div>
+            <ul className="mt-3 space-y-2 text-sm text-neutral-700">
+              <li>✅ Everything in Free</li>
+              <li>✅ All departments (electronics, home, apparel…)</li>
+              <li>✅ 200+ retailers</li>
+              <li>✅ Advanced filters & alerts</li>
+            </ul>
+            <button className="mt-6 w-full rounded-xl bg-emerald-600 text-white px-4 py-2" onClick={handleUpgrade}>
+              Upgrade to Premium
+            </button>
+            <div className="mt-3 text-xs text-neutral-500">🔒 Stripe Secure Checkout</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Testimonials */}
+      <section id="reviews" className="container mx-auto max-w-6xl px-4 pb-16">
+        <h2 className="text-3xl font-bold text-center">What users say</h2>
+        <div className="mt-8 grid md:grid-cols-3 gap-6">
+          <blockquote className="rounded-xl border p-4 bg-white shadow-sm">
+            <div className="font-semibold">Jasmine T.</div>
+            <div className="text-yellow-500" aria-label="5 stars">★★★★★</div>
+            <p className="mt-2 text-sm">Found cheaper groceries near me in minutes. My weekly bill dropped a lot.</p>
+          </blockquote>
+          <blockquote className="rounded-xl border p-4 bg-white shadow-sm">
+            <div className="font-semibold">Mark D.</div>
+            <div className="text-yellow-500" aria-label="5 stars">★★★★★</div>
+            <p className="mt-2 text-sm">Compared prices across stores without opening 10 tabs. Huge time saver.</p>
+          </blockquote>
+          <blockquote className="rounded-xl border p-4 bg-white shadow-sm">
+            <div className="font-semibold">Elena R.</div>
+            <div className="text-yellow-500" aria-label="5 stars">★★★★★</div>
+            <p className="mt-2 text-sm">Caught a sale on my go-to coffee—stocked up instantly.</p>
+          </blockquote>
+        </div>
+      </section>
+
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} onAuthed={() => setAuthOpen(false)} />
+    </>
   );
 }
